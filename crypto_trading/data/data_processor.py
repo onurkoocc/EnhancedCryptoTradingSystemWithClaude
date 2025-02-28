@@ -227,7 +227,7 @@ class CryptoDataPreparer:
 
     def _build_sequences(self, data_array: np.ndarray, labels_array: np.ndarray,
                          fwd_returns_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Build sequences for training.
+        """Build sequences for training with better handling of edge cases.
 
         Args:
             data_array: NumPy array with feature data
@@ -239,26 +239,58 @@ class CryptoDataPreparer:
         """
         num_samples = len(data_array) - self.sequence_length + 1
 
+        # Handle edge case of insufficient data
         if num_samples <= 0:
-            return np.array([]), np.array([]), np.array([])
+            self.logger.warning(
+                f"Insufficient data for sequence building: {len(data_array)} rows < {self.sequence_length} sequence length"
+            )
+            # Return at least one sample by duplicating data if available
+            if len(data_array) > 0:
+                # Create a single sample by duplicating data
+                X = np.zeros((1, self.sequence_length, data_array.shape[1]), dtype=np.float32)
+                # Fill with repeated data
+                for i in range(self.sequence_length):
+                    X[0, i] = data_array[min(i, len(data_array) - 1)]
+
+                # Create a balanced label (equal probability for all classes)
+                y = np.zeros((1, 5), dtype=np.float32)
+                y[0] = np.array([0.2, 0.2, 0.2, 0.2, 0.2])
+
+                # Create a zero forward return
+                fwd_returns = np.zeros(1, dtype=np.float32)
+
+                self.logger.warning("Created minimal synthetic data for initialization")
+                return X, y, fwd_returns
+            else:
+                # Truly empty data, return empty arrays
+                return np.array([]), np.array([]), np.array([])
 
         # Initialize arrays
         X = np.zeros((num_samples, self.sequence_length, data_array.shape[1]), dtype=np.float32)
         y = np.zeros((num_samples, 5), dtype=np.float32)  # 5 classes for classification
         fwd_returns = np.zeros(num_samples, dtype=np.float32)
 
-        # Build sequences (can be optimized with stride_tricks for very large datasets)
+        # Build sequences
         for i in range(num_samples):
             X[i] = data_array[i:i + self.sequence_length]
 
             # One-hot encode the label
-            label = labels_array[i + self.sequence_length - 1]
-            y[i, label] = 1  # Set the corresponding class to 1
+            label_idx = i + self.sequence_length - 1
+            if label_idx < len(labels_array):
+                label = labels_array[label_idx]
+                y[i, label] = 1  # Set the corresponding class to 1
+            else:
+                # Handle edge case
+                y[i, 2] = 1  # Default to neutral class if out of bounds
 
             # Store forward return
-            fwd_returns[i] = fwd_returns_array[i + self.sequence_length - 1]
+            if label_idx < len(fwd_returns_array):
+                fwd_returns[i] = fwd_returns_array[label_idx]
+            else:
+                fwd_returns[i] = 0.0  # Default to zero if out of bounds
 
         return X, y, fwd_returns
+
 
     def _normalize_data(self, X_train: np.ndarray, X_val: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Normalize data using specified method.

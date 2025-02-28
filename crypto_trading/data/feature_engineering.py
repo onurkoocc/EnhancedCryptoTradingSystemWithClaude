@@ -7,6 +7,8 @@ raw market data for use in machine learning models.
 
 import logging
 import os
+from dataclasses import asdict
+
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Union, Any
@@ -17,6 +19,7 @@ from concurrent.futures import ProcessPoolExecutor
 import functools
 import gc
 
+from ..config import FeatureEngineeringConfig
 from ..utils.logging_utils import exception_handler
 from ..utils.memory_monitor import memory_usage_decorator, log_memory_usage
 
@@ -26,19 +29,20 @@ class EnhancedCryptoFeatureEngineer:
 
     def __init__(self, feature_scaling: bool = False,
                  logger: Optional[logging.Logger] = None,
-                 config: Optional[Dict[str, Any]] = None):
-        """Initialize feature engineer.
-
-        Args:
-            feature_scaling: Whether to scale features
-            logger: Logger to use
-            config: Configuration dictionary with feature parameters
-        """
+                 config: Optional[Union[Dict[str, Any], FeatureEngineeringConfig]] = None):
+        """Initialize feature engineer."""
         self.feature_scaling = feature_scaling
         self.logger = logger or logging.getLogger('FeatureEngineer')
 
-        # Load configuration or use defaults
-        self.config = config or {}
+        # Handle both dictionary and dataclass config
+        if config is None:
+            self.config = {}
+        elif hasattr(config, '__dataclass_fields__'):
+            # It's a dataclass, convert to dict
+            self.config = asdict(config)
+        else:
+            # It's already a dict
+            self.config = config
 
         # Daily parameters
         self.ma_periods_daily = self.config.get('ma_periods_daily', [10, 20, 50])
@@ -213,7 +217,7 @@ class EnhancedCryptoFeatureEngineer:
         return combined
 
     def _align_timeframes(self, higher_tf_data: pd.DataFrame, target_index: pd.DatetimeIndex) -> pd.DataFrame:
-        """Align higher timeframe data to target timeframe index.
+        """Align higher timeframe data to target timeframe index with more robust handling.
 
         Args:
             higher_tf_data: Higher timeframe DataFrame
@@ -223,38 +227,63 @@ class EnhancedCryptoFeatureEngineer:
             DataFrame aligned to target timeframe
         """
         if higher_tf_data.empty or len(target_index) == 0:
+            # Return empty DataFrame with columns from higher_tf_data
+            if not higher_tf_data.empty:
+                return pd.DataFrame(columns=higher_tf_data.columns, index=target_index)
             return pd.DataFrame(index=target_index)
 
-        # Create a DataFrame with the target index
-        aligned_data = pd.DataFrame(index=target_index)
+        try:
+            # Simple reindex - fastest and most reliable method for most cases
+            return higher_tf_data.reindex(index=target_index, method='ffill')
+        except Exception as e:
+            self.logger.warning(f"Simple reindex failed: {str(e)}. Trying custom alignment.")
 
-        # For each higher timeframe row
-        for i, (idx, row) in enumerate(higher_tf_data.iterrows()):
-            # Handle the last candle
-            if i == len(higher_tf_data) - 1:
-                # For the last candle, include all remaining target indices
-                mask = target_index >= idx
-            else:
-                # Get the next timestamp
-                next_idx = higher_tf_data.index[i + 1]
-                # Find target indices between this candle and the next
-                # Use element-wise comparison with scalar values
-                mask = (target_index >= idx) & (target_index < next_idx)
+            # Create a DataFrame with the target index
+            aligned_data = pd.DataFrame(index=target_index)
 
-            # Skip if mask is empty
-            if not any(mask):
-                continue
-
-            # Set values for all columns
+            # Add all columns from higher_tf_data, initialized to NaN
             for col in higher_tf_data.columns:
-                if col not in aligned_data:
-                    aligned_data[col] = np.nan
-                aligned_data.loc[mask, col] = row[col]
+                aligned_data[col] = np.nan
 
-        # Fill any remaining NaN values with method='ffill'
-        aligned_data = aligned_data.fillna(method='ffill')
+            # Use a more robust loop-based approach
+            try:
+                last_valid_row = None
 
-        return aligned_data
+                # First, find indices that match exactly
+                common_indices = target_index.intersection(higher_tf_data.index)
+                if len(common_indices) > 0:
+                    aligned_data.loc[common_indices] = higher_tf_data.loc[common_indices]
+
+                # For each higher timeframe row, fill forward
+                sorted_higher_idx = sorted(higher_tf_data.index)
+                for idx in sorted_higher_idx:
+                    # Find all target indices that are >= this index and < next index
+                    if idx == sorted_higher_idx[-1]:  # Last index
+                        mask = target_index >= idx
+                    else:
+                        next_idx_pos = sorted_higher_idx.index(idx) + 1
+                        next_idx = sorted_higher_idx[next_idx_pos]
+                        mask = (target_index >= idx) & (target_index < next_idx)
+
+                    # Fill values for this period
+                    if any(mask):
+                        for col in higher_tf_data.columns:
+                            aligned_data.loc[mask, col] = higher_tf_data.loc[idx, col]
+
+                # Fill any remaining NaNs with forward fill
+                aligned_data = aligned_data.ffill()
+
+                return aligned_data
+            except Exception as inner_e:
+                self.logger.error(f"Custom alignment failed: {str(inner_e)}. Using best-effort fallback.")
+
+                # Last resort fallback - create a dataframe with constant values from the first row
+                if not higher_tf_data.empty:
+                    first_row = higher_tf_data.iloc[0]
+                    for col in higher_tf_data.columns:
+                        aligned_data[col] = first_row[col]
+
+                return aligned_data
 
     @exception_handler(reraise=True)
     def process_data_in_chunks(self, df_30m: pd.DataFrame, df_4h: pd.DataFrame,

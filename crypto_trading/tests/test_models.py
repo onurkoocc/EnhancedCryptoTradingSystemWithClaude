@@ -4,19 +4,14 @@ Unit tests for the models module.
 This module provides tests for model creation, training, and inference.
 """
 
-import pytest
-import pandas as pd
 import numpy as np
-import os
-import tempfile
-from unittest.mock import patch, MagicMock
-
+import pandas as pd
+import pytest
 import tensorflow as tf
-from keras.optimizers import Adam
 
+from crypto_trading.models.callbacks import RiskAdjustedTradeMetric
 from crypto_trading.models.crypto_model import EnhancedCryptoModel
 from crypto_trading.models.metrics import TradingMetrics
-from crypto_trading.models.callbacks import RiskAdjustedTradeMetric
 
 
 @pytest.fixture
