@@ -230,6 +230,8 @@ class EnhancedSignalProducer:
                         "oi_signal": oi_signal,
                         "adjusted_confidence": max(P_positive, P_negative)
                     }
+        else:
+            self.logger.debug("Open interest data not available for signal generation")
 
         # Filter 7: Funding Rate filter
         funding_signal = 0

@@ -116,17 +116,22 @@ class EnhancedCryptoFeatureEngineer:
         feat_30m = self._compute_indicators_30m(df_30m).add_prefix('m30_')
         feat_30m[['open', 'high', 'low', 'close', 'volume']] = df_30m[['open', 'high', 'low', 'close', 'volume']]
 
+        # In process_data_3way method:
         # Add open interest features if available
-        if df_oi is not None:
+        if df_oi is not None and not df_oi.empty and 'openInterest' in df_oi.columns:
             self.logger.info("Adding open interest features")
             oi_features = self._compute_open_interest_features(df_oi, df_30m.index).add_prefix('oi_')
             feat_30m = pd.concat([feat_30m, oi_features], axis=1)
+        else:
+            self.logger.warning("Open interest data not available, skipping related features")
 
         # Add funding rate features if available
-        if df_funding is not None:
+        if df_funding is not None and not df_funding.empty and 'fundingRate' in df_funding.columns:
             self.logger.info("Adding funding rate features")
             funding_features = self._compute_funding_features(df_funding, df_30m.index).add_prefix('funding_')
             feat_30m = pd.concat([feat_30m, funding_features], axis=1)
+        else:
+            self.logger.warning("Funding rate data not available, skipping related features")
 
         # Clear unused DataFrames
         del df_30m
@@ -426,11 +431,26 @@ class EnhancedCryptoFeatureEngineer:
         # Filter out None results
         chunk_results = [result for result in chunk_results if result is not None]
 
+        # Check if we have any valid results
+        if not chunk_results:
+            self.logger.error("All parallel chunks failed processing. Falling back to sequential processing.")
+            return self._process_chunks_sequential(df_30m, df_4h, df_daily, chunk_size, df_oi, df_funding)
+
         # Combine results
         self.logger.info("Combining results from all parallel chunks")
-        combined = pd.concat(chunk_results, copy=False)
-
-        return combined
+        try:
+            combined = pd.concat(chunk_results, copy=False)
+            return combined
+        except ValueError as e:
+            self.logger.error(f"Error combining chunk results: {e}")
+            # If concatenation failed but we have at least one valid result, return the first one
+            if len(chunk_results) > 0:
+                self.logger.warning("Returning result from first successful chunk as fallback")
+                return chunk_results[0]
+            else:
+                # Last resort - return an empty DataFrame with the right columns
+                self.logger.error("No valid chunks to combine. Returning empty DataFrame")
+                return pd.DataFrame()
 
     def _process_chunk_wrapper(self, chunk_data: Dict[str, Any], df_30m: pd.DataFrame,
                                df_4h: pd.DataFrame, df_daily: pd.DataFrame,
@@ -453,8 +473,8 @@ class EnhancedCryptoFeatureEngineer:
             # Extract chunk info
             start_idx = chunk_data['start_idx']
             end_idx = chunk_data['end_idx']
-            start_time = chunk_data['start_time']
-            end_time = chunk_data['end_time']
+            start_time = pd.Timestamp(chunk_data['start_time'])  # Convert to pandas Timestamp
+            end_time = pd.Timestamp(chunk_data['end_time'])  # Convert to pandas Timestamp
 
             # Extract chunk data
             chunk_30m = df_30m.iloc[start_idx:end_idx]

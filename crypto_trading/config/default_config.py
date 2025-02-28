@@ -210,8 +210,8 @@ class SystemConfig:
 
     # Environment
     env: str = 'dev'  # 'dev', 'test', or 'prod'
-    binance_api_key_env_var: str = "BINANCE_API_KEY"
-    binance_api_secret_env_var: str = "BINANCE_API_SECRET"
+    binance_api_key_env_var: str = "XW2qoCu1zlZdA8FEW98y7Md55ZtJ7fpaV1un6QkZErMeHIY7VXYAY5J6FonVTUdy"
+    binance_api_secret_env_var: str = "ivuwpI0yYRPRvSrex0IHGLcF4QP6jWTcUMCsWJ0DSQ3retcwOSTcmm9yzB1PFaP2"
 
 
 def get_default_config() -> SystemConfig:

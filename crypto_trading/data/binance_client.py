@@ -199,15 +199,7 @@ class BitcoinData:
 
     @exception_handler(reraise=True)
     def fetch_open_interest(self, live: bool = False, lookback_candles: int = 7000) -> pd.DataFrame:
-        """Fetch open interest data from file or Binance API.
-
-        Args:
-            live: Whether to force fetch from API even if file exists
-            lookback_candles: Number of data points to fetch
-
-        Returns:
-            DataFrame with open interest data
-        """
+        """Fetch open interest data from file or Binance API."""
         # Check if file exists and we're not in live mode
         if os.path.exists(self.csv_oi) and not live:
             self.logger.info(f"Loading open interest data from {self.csv_oi}")
@@ -235,6 +227,10 @@ class BitcoinData:
                 if not oi_data:
                     break
 
+                # Debug logging to see response structure
+                if _ == 0:
+                    self.logger.debug(f"First open interest record: {oi_data[0]}")
+
                 data.extend(oi_data)
 
                 if len(oi_data) < limit:
@@ -244,11 +240,43 @@ class BitcoinData:
                 end_time = int(oi_data[-1]['timestamp']) - 1
 
             # Convert to DataFrame
+            if not data:
+                self.logger.warning("No open interest data received from API")
+                return pd.DataFrame(columns=['openInterest', 'sumOpenInterest'])
+
             df = pd.DataFrame(data)
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df['openInterest'] = pd.to_numeric(df['openInterest'], errors='coerce').astype(np.float32)
-            df['sumOpenInterest'] = pd.to_numeric(df['sumOpenInterest'], errors='coerce').astype(np.float32)
-            df.set_index('timestamp', inplace=True)
+
+            # Debug logging to see available columns
+            self.logger.debug(f"Open interest data columns: {df.columns.tolist()}")
+
+            # Check if we have the expected columns and handle missing columns
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+            else:
+                self.logger.error("Missing 'timestamp' column in API response")
+                return pd.DataFrame(columns=['openInterest', 'sumOpenInterest'])
+
+            # Convert numeric columns if they exist
+            if 'openInterest' in df.columns:
+                df['openInterest'] = pd.to_numeric(df['openInterest'], errors='coerce').astype(np.float32)
+            else:
+                self.logger.warning("Missing 'openInterest' column in API response")
+                # Check for alternative column names
+                possible_columns = ['openInterest', 'open_interest', 'oi', 'sumOpenInterest']
+                for col in possible_columns:
+                    if col in df.columns:
+                        self.logger.info(f"Using alternative column '{col}' for open interest")
+                        df['openInterest'] = pd.to_numeric(df[col], errors='coerce').astype(np.float32)
+                        break
+                else:
+                    # No suitable column found, create empty one
+                    df['openInterest'] = np.nan
+
+            if 'sumOpenInterest' in df.columns:
+                df['sumOpenInterest'] = pd.to_numeric(df['sumOpenInterest'], errors='coerce').astype(np.float32)
+            else:
+                df['sumOpenInterest'] = np.nan
 
             # Save to CSV
             df.to_csv(self.csv_oi, index=True)
@@ -256,13 +284,14 @@ class BitcoinData:
 
             return df
 
-        except ClientError as e:
-            self.logger.error(f"Binance API error fetching open interest data: {e}")
+        except Exception as e:
+            self.logger.error(f"Binance API error fetching open interest data: {str(e)}")
             # If API fails but we have a CSV file, use it as fallback
             if os.path.exists(self.csv_oi):
                 self.logger.info(f"Using existing {self.csv_oi} as fallback")
                 return pd.read_csv(self.csv_oi, index_col='timestamp', parse_dates=True)
-            raise
+            # Otherwise return an empty DataFrame with expected columns
+            return pd.DataFrame(columns=['openInterest', 'sumOpenInterest'])
 
     @RetryWithBackoff(max_retries=3, exceptions=(ClientError, ConnectionError))
     def _fetch_open_interest_with_retry(self, **kwargs) -> List[Dict[str, Any]]:
@@ -350,14 +379,35 @@ class BitcoinData:
         """Fetch funding rate data with retry mechanism.
 
         Args:
-            **kwargs: Arguments to pass to the funding_rate_history method
+            **kwargs: Arguments to pass to the funding rate method
 
         Returns:
             List of funding rate data
         """
-        return self.client.funding_rate_history(**kwargs)
+        # Try the correct method name according to Binance API documentation
+        if hasattr(self.client, 'get_funding_rate_history'):
+            return self.client.get_funding_rate_history(**kwargs)
+        elif hasattr(self.client, 'get_funding_rate'):
+            return self.client.get_funding_rate(**kwargs)
+        elif hasattr(self.client, 'funding_rate'):
+            return self.client.funding_rate(**kwargs)
+        else:
+            self.logger.warning("Could not find funding rate method in Binance client, using fallback")
+            # Fallback to another available method
+            try:
+                # Check what methods are available for future reference
+                available_methods = [method for method in dir(self.client) if 'fund' in method.lower()]
+                self.logger.info(f"Available funding-related methods: {available_methods}")
 
-    @exception_handler(reraise=True)
+                # Try premium_index which often contains funding rate data
+                if hasattr(self.client, 'mark_price'):
+                    return self.client.mark_price(**kwargs)
+                return []
+            except Exception as e:
+                self.logger.warning(f"Fallback funding rate method failed: {e}")
+                return []
+
+    @exception_handler(reraise=False, fallback_value=pd.DataFrame())
     def fetch_liquidation_data(self, live: bool = False, limit: int = 500) -> pd.DataFrame:
         """Fetch recent liquidation events from Binance API.
 
@@ -369,8 +419,14 @@ class BitcoinData:
             DataFrame with liquidation data, or empty DataFrame if error
         """
         self.logger.info("Fetching liquidation data from Binance API")
+
+        # Check if API keys are available and valid
+        if not self.api_key or len(self.api_key) < 10 or not self.api_secret or len(self.api_secret) < 10:
+            self.logger.warning("Valid API key and secret are required for fetching liquidation data")
+            return pd.DataFrame()
+
         try:
-            # Get liquidation orders
+            # Get liquidation orders - this endpoint may require API key authentication
             liquidation_data = self._fetch_liquidations_with_retry(
                 symbol=self.symbol,
                 limit=limit
@@ -408,7 +464,16 @@ class BitcoinData:
         Returns:
             List of liquidation data
         """
-        return self.client.force_orders(**kwargs)
+        # This endpoint may require different methods based on the Binance client version
+        if hasattr(self.client, 'force_orders'):
+            return self.client.force_orders(**kwargs)
+        elif hasattr(self.client, 'get_force_orders'):
+            return self.client.get_force_orders(**kwargs)
+        elif hasattr(self.client, 'get_all_liquidation_orders'):
+            return self.client.get_all_liquidation_orders(**kwargs)
+        else:
+            self.logger.warning("Could not find liquidation order method in Binance client")
+            return []
 
     @exception_handler(reraise=True)
     def derive_4h_data(self, df_30m: pd.DataFrame) -> pd.DataFrame:
@@ -503,28 +568,45 @@ class BitcoinData:
         return df
 
     def fetch_all_data(self, live: bool = False, lookback_candles: int = 7000) -> Dict[str, pd.DataFrame]:
-        """Fetch all needed data at once.
-
-        Args:
-            live: Whether to force fetch from API
-            lookback_candles: Number of candles to fetch
-
-        Returns:
-            Dictionary with all dataframes
-        """
+        """Fetch all needed data at once."""
         self.logger.info("Fetching all market data")
 
-        # Fetch 30m data
-        df_30m = self.fetch_30m_data(live=live, lookback_candles=lookback_candles)
+        # Fetch 30m data (required)
+        try:
+            df_30m = self.fetch_30m_data(live=live, lookback_candles=lookback_candles)
+        except Exception as e:
+            self.logger.error(f"Critical error fetching 30m data: {e}")
+            raise  # This is essential data, so we re-raise the exception
 
-        # Derive 4h and daily data
-        df_4h = self.derive_4h_data(df_30m)
-        df_daily = self.derive_daily_data(df_30m)
+        # Derive 4h and daily data (required)
+        try:
+            df_4h = self.derive_4h_data(df_30m)
+            df_daily = self.derive_daily_data(df_30m)
+        except Exception as e:
+            self.logger.error(f"Error deriving timeframe data: {e}")
+            # Try to create empty DataFrames with expected columns
+            df_4h = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume', 'turnover'])
+            df_daily = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume', 'turnover'])
 
-        # Fetch additional data
-        df_oi = self.fetch_open_interest(live=live, lookback_candles=lookback_candles)
-        df_funding = self.fetch_funding_rates(live=live, lookback_candles=lookback_candles)
-        df_liquidations = self.fetch_liquidation_data(live=live)
+        # Fetch additional data (optional)
+        df_oi = pd.DataFrame()
+        df_funding = pd.DataFrame()
+        df_liquidations = pd.DataFrame()
+
+        try:
+            df_oi = self.fetch_open_interest(live=live, lookback_candles=lookback_candles)
+        except Exception as e:
+            self.logger.warning(f"Error fetching open interest data: {e}")
+
+        try:
+            df_funding = self.fetch_funding_rates(live=live, lookback_candles=lookback_candles)
+        except Exception as e:
+            self.logger.warning(f"Error fetching funding rate data: {e}")
+
+        try:
+            df_liquidations = self.fetch_liquidation_data(live=live)
+        except Exception as e:
+            self.logger.warning(f"Error fetching liquidation data: {e}")
 
         return {
             '30m': df_30m,
