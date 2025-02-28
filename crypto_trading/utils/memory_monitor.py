@@ -323,6 +323,7 @@ def monitor_memory(threshold_gb: float = 16,
     return monitor.start(in_background)
 
 
+
 def memory_usage_decorator(logger: Optional[logging.Logger] = None,
                            threshold_gb: Optional[float] = None):
     """Decorator to log memory usage before and after function execution.
@@ -334,7 +335,6 @@ def memory_usage_decorator(logger: Optional[logging.Logger] = None,
     Returns:
         Decorated function
     """
-
     def decorator(func):
         nonlocal logger
         if logger is None:
@@ -354,9 +354,10 @@ def memory_usage_decorator(logger: Optional[logging.Logger] = None,
             # Log memory after
             mem_after = log_memory_usage()
             mem_diff = mem_after - mem_before
+            # Use 'plus/minus' text instead of Unicode delta character
             logger.info(
                 f"Memory after {func.__name__}: {mem_after:.2f}GB "
-                f"(Δ{mem_diff:+.2f}GB, {execution_time:.2f}s)"
+                f"(change: {'+' if mem_diff >= 0 else ''}{mem_diff:.2f}GB, {execution_time:.2f}s)"
             )
 
             # Check threshold

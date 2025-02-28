@@ -71,16 +71,19 @@ class LoggerFactory:
         # Create formatter
         formatter = logging.Formatter(self.log_format)
 
-        # Console handler
+        # Console handler with proper encoding
         if self.console_logging:
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(formatter)
+            # Ensure encoding is properly set for Windows
+            console_handler.setStream(sys.stdout)
             root_logger.addHandler(console_handler)
 
         # File handler for root logger
         if self.file_logging and self.log_dir:
             file_path = os.path.join(self.log_dir, f'system_{datetime.now():%Y%m%d_%H%M%S}.log')
-            file_handler = logging.FileHandler(file_path)
+            # Use encoding='utf-8' to handle Unicode characters
+            file_handler = logging.FileHandler(file_path, encoding='utf-8')
             file_handler.setFormatter(formatter)
             root_logger.addHandler(file_handler)
 
