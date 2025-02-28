@@ -1,0 +1,42 @@
+# Core dependencies
+numpy>=1.20.0
+pandas>=1.3.0
+scipy>=1.7.0
+matplotlib>=3.4.0
+scikit-learn>=1.0.0
+
+# TensorFlow and neural network related
+tensorflow==2.16.1
+keras==3.8.0
+keras-tuner>=1.1.0
+
+# API clients
+python-binance>=1.0.15
+
+# Utilities
+psutil>=5.9.0
+pyyaml>=6.0.0
+tqdm>=4.62.0
+requests>=2.27.0
+python-dotenv>=0.19.0
+watchdog>=2.1.0
+
+# Logging and monitoring
+colorlog>=6.6.0
+tensorboard>=2.8.0
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=3.0.0
+pytest-mock>=3.6.0
+
+# Jupyter for analysis (optional)
+jupyterlab>=3.3.0
+ipywidgets>=7.7.0
+
+# Documentation
+sphinx>=4.4.0
+sphinx-rtd-theme>=1.0.0
+
+# Deployment
+docker>=5.0.0
