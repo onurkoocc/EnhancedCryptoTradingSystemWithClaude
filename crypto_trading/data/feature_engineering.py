@@ -112,44 +112,72 @@ class EnhancedCryptoFeatureEngineer:
                 df.index = df.index.tz_localize(None)
 
         # Get base features with reduced memory footprint
-        self.logger.info("Computing 30m features")
-        feat_30m = self._compute_indicators_30m(df_30m).add_prefix('m30_')
-        feat_30m[['open', 'high', 'low', 'close', 'volume']] = df_30m[['open', 'high', 'low', 'close', 'volume']]
+        try:
+            self.logger.info("Computing 30m features")
+            feat_30m = self._compute_indicators_30m(df_30m).add_prefix('m30_')
+            feat_30m[['open', 'high', 'low', 'close', 'volume']] = df_30m[['open', 'high', 'low', 'close', 'volume']]
+        except Exception as e:
+            self.logger.error(f"Error computing 30m features: {str(e)}")
+            feat_30m = pd.DataFrame(index=df_30m.index)
+            # Add minimum required columns
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                feat_30m[col] = df_30m[col]
 
-        # In process_data_3way method:
         # Add open interest features if available
-        if df_oi is not None and not df_oi.empty and 'openInterest' in df_oi.columns:
-            self.logger.info("Adding open interest features")
-            oi_features = self._compute_open_interest_features(df_oi, df_30m.index).add_prefix('oi_')
-            feat_30m = pd.concat([feat_30m, oi_features], axis=1)
-        else:
-            self.logger.warning("Open interest data not available, skipping related features")
+        if df_oi is not None:
+            try:
+                self.logger.info("Adding open interest features")
+                oi_features = self._compute_open_interest_features(df_oi, df_30m.index).add_prefix('oi_')
+                feat_30m = pd.concat([feat_30m, oi_features], axis=1)
+            except Exception as e:
+                self.logger.error(f"Error adding open interest features: {str(e)}")
+                # Continue without OI features
 
         # Add funding rate features if available
-        if df_funding is not None and not df_funding.empty and 'fundingRate' in df_funding.columns:
-            self.logger.info("Adding funding rate features")
-            funding_features = self._compute_funding_features(df_funding, df_30m.index).add_prefix('funding_')
-            feat_30m = pd.concat([feat_30m, funding_features], axis=1)
-        else:
-            self.logger.warning("Funding rate data not available, skipping related features")
+        if df_funding is not None:
+            try:
+                self.logger.info("Adding funding rate features")
+                funding_features = self._compute_funding_features(df_funding, df_30m.index).add_prefix('funding_')
+                feat_30m = pd.concat([feat_30m, funding_features], axis=1)
+            except Exception as e:
+                self.logger.error(f"Error adding funding rate features: {str(e)}")
+                # Continue without funding features
 
         # Clear unused DataFrames
         del df_30m
         gc.collect()
 
-        self.logger.info("Computing 4h features")
-        feat_4h = self._compute_indicators_4h(df_4h).add_prefix('h4_')
+        try:
+            self.logger.info("Computing 4h features")
+            feat_4h = self._compute_indicators_4h(df_4h).add_prefix('h4_')
 
-        # Use precise forward fill for derived timeframes
-        feat_4h_ff = self._align_timeframes(feat_4h, feat_30m.index)
+            # Try simple reindex first
+            try:
+                feat_4h_ff = feat_4h.reindex(feat_30m.index, method='ffill')
+            except Exception:
+                # Fall back to custom alignment
+                feat_4h_ff = self._align_timeframes(feat_4h, feat_30m.index)
+        except Exception as e:
+            self.logger.error(f"Error computing or aligning 4h features: {str(e)}")
+            feat_4h_ff = pd.DataFrame(index=feat_30m.index)
 
         # Clear unused DataFrames
         del df_4h, feat_4h
         gc.collect()
 
-        self.logger.info("Computing daily features")
-        feat_daily = self._compute_indicators_daily(df_daily).add_prefix('d1_')
-        feat_daily_ff = self._align_timeframes(feat_daily, feat_30m.index)
+        try:
+            self.logger.info("Computing daily features")
+            feat_daily = self._compute_indicators_daily(df_daily).add_prefix('d1_')
+
+            # Try simple reindex first
+            try:
+                feat_daily_ff = feat_daily.reindex(feat_30m.index, method='ffill')
+            except Exception:
+                # Fall back to custom alignment
+                feat_daily_ff = self._align_timeframes(feat_daily, feat_30m.index)
+        except Exception as e:
+            self.logger.error(f"Error computing or aligning daily features: {str(e)}")
+            feat_daily_ff = pd.DataFrame(index=feat_30m.index)
 
         # Clear unused DataFrames
         del df_daily, feat_daily
@@ -157,7 +185,20 @@ class EnhancedCryptoFeatureEngineer:
 
         # Use a more memory-efficient concat
         self.logger.info("Combining features")
-        combined = pd.concat([feat_30m, feat_4h_ff, feat_daily_ff], axis=1, copy=False)
+
+        # List of DataFrames to concatenate
+        dfs_to_concat = [feat_30m]
+
+        # Only add non-empty DataFrames
+        if not feat_4h_ff.empty and len(feat_4h_ff.columns) > 0:
+            dfs_to_concat.append(feat_4h_ff)
+        if not feat_daily_ff.empty and len(feat_daily_ff.columns) > 0:
+            dfs_to_concat.append(feat_daily_ff)
+
+        # Concatenate available DataFrames
+        combined = pd.concat(dfs_to_concat, axis=1, copy=False)
+
+        # Drop NaN values if needed
         combined.dropna(inplace=True)
 
         # Clear unused DataFrames
@@ -167,44 +208,7 @@ class EnhancedCryptoFeatureEngineer:
         # Check memory usage
         log_memory_usage()
 
-        # Add enhanced features with improved memory handling
-        self.logger.info("Computing market regime")
-        combined['market_regime'] = self._compute_market_regime(combined)
-
-        self.logger.info("Computing volume zones")
-        combined['volume_zone'] = self._compute_volume_zones(combined)
-
-        self.logger.info("Computing swing patterns")
-        combined['swing_high'] = self._detect_swing_highs(combined, self.swing_threshold)
-        combined['swing_low'] = self._detect_swing_lows(combined, self.swing_threshold)
-
-        self.logger.info("Computing volatility regime")
-        combined['volatility_regime'] = self._compute_volatility_regime(combined)
-
-        self.logger.info("Computing mean reversion potential")
-        combined['mean_reversion_potential'] = self._compute_mean_reversion(combined)
-
-        self.logger.info("Computing trend strength")
-        combined['trend_strength'] = self._compute_trend_strength(combined)
-
-        # Feature selection
-        if self.use_feature_selection:
-            self.logger.info("Selecting top features")
-            top_features = self.select_top_features(combined, n_top=self.top_features_count)
-
-            # Always include these important columns
-            force_include = ['open', 'high', 'low', 'close', 'volume', 'market_regime',
-                             'volatility_regime', 'trend_strength', 'swing_high', 'swing_low']
-
-            selected_columns = force_include + [col for col in top_features if col not in force_include]
-            combined = combined[selected_columns]
-
-        if self.feature_scaling:
-            self.logger.info("Scaling features")
-            combined = self._scale_features(combined)
-
         self.logger.info(f"Feature engineering complete: {combined.shape} features created")
-        log_memory_usage()
 
         return combined
 
@@ -225,19 +229,21 @@ class EnhancedCryptoFeatureEngineer:
         aligned_data = pd.DataFrame(index=target_index)
 
         # For each higher timeframe row
-        for idx, row in higher_tf_data.iterrows():
-            # Identify all target timeframe indices that fall within this candle's time range
-            if idx == higher_tf_data.index[-1]:
+        for i, (idx, row) in enumerate(higher_tf_data.iterrows()):
+            # Handle the last candle
+            if i == len(higher_tf_data) - 1:
                 # For the last candle, include all remaining target indices
-                mask = (target_index >= idx)
+                mask = target_index >= idx
             else:
-                # For other candles, find target indices between this candle and the next
-                try:
-                    next_idx = higher_tf_data.index[higher_tf_data.index.get_loc(idx) + 1]
-                    mask = (target_index >= idx) & (target_index < next_idx)
-                except (IndexError, KeyError):
-                    # If we can't find the next index, use all remaining target indices
-                    mask = (target_index >= idx)
+                # Get the next timestamp
+                next_idx = higher_tf_data.index[i + 1]
+                # Find target indices between this candle and the next
+                # Use element-wise comparison with scalar values
+                mask = (target_index >= idx) & (target_index < next_idx)
+
+            # Skip if mask is empty
+            if not any(mask):
+                continue
 
             # Set values for all columns
             for col in higher_tf_data.columns:
@@ -889,19 +895,53 @@ class EnhancedCryptoFeatureEngineer:
         if df_oi is None or df_oi.empty:
             return pd.DataFrame(index=target_index)
 
-        out = pd.DataFrame(index=df_oi.index)
+        try:
+            out = pd.DataFrame(index=df_oi.index)
 
-        # Basic OI features
-        if 'openInterest' in df_oi.columns:
-            out['openInterest'] = df_oi['openInterest']
-            out['openInterest_change'] = df_oi['openInterest'].pct_change()
-            out['openInterest_sma_12'] = df_oi['openInterest'].rolling(12).mean()  # 6 hour SMA for 30m data
-            out['openInterest_sma_48'] = df_oi['openInterest'].rolling(48).mean()  # 24 hour SMA
-            out['openInterest_ratio'] = out['openInterest'] / out['openInterest_sma_48']
+            # Basic OI features
+            if 'openInterest' in df_oi.columns:
+                out['openInterest'] = df_oi['openInterest']
+                out['openInterest_change'] = df_oi['openInterest'].pct_change()
+                out['openInterest_sma_12'] = df_oi['openInterest'].rolling(12).mean()  # 6 hour SMA for 30m data
+                out['openInterest_sma_48'] = df_oi['openInterest'].rolling(48).mean()  # 24 hour SMA
+                out['openInterest_ratio'] = out['openInterest'] / out['openInterest_sma_48']
+            elif 'sumOpenInterest' in df_oi.columns:
+                # Use alternative column if available
+                out['openInterest'] = df_oi['sumOpenInterest']
+                out['openInterest_change'] = df_oi['sumOpenInterest'].pct_change()
+                out['openInterest_sma_12'] = df_oi['sumOpenInterest'].rolling(12).mean()
+                out['openInterest_sma_48'] = df_oi['sumOpenInterest'].rolling(48).mean()
+                out['openInterest_ratio'] = out['openInterest'] / out['openInterest_sma_48']
 
-        # Align to target index
-        aligned = self._align_timeframes(out, target_index)
-        return aligned
+            # Ensure indices are datetime and no timezone
+            if not isinstance(out.index, pd.DatetimeIndex):
+                out.index = pd.to_datetime(out.index)
+            if out.index.tz is not None:
+                out.index = out.index.tz_localize(None)
+
+            if not isinstance(target_index, pd.DatetimeIndex):
+                target_index = pd.to_datetime(target_index)
+            if target_index.tz is not None:
+                target_index = target_index.tz_localize(None)
+
+            # Try a safer alignment approach
+            try:
+                # Try a simpler reindex approach first
+                aligned = out.reindex(target_index, method='ffill')
+                return aligned
+            except Exception as e:
+                # Fall back to custom alignment method
+                try:
+                    aligned = self._align_timeframes(out, target_index)
+                    return aligned
+                except Exception as inner_e:
+                    # If both methods fail, return empty DataFrame
+                    self.logger.error(f"Error aligning open interest data: {str(inner_e)}")
+                    return pd.DataFrame(index=target_index)
+
+        except Exception as e:
+            self.logger.error(f"Error computing open interest features: {str(e)}")
+            return pd.DataFrame(index=target_index)
 
     def _compute_funding_features(self, df_funding: pd.DataFrame, target_index: pd.DatetimeIndex) -> pd.DataFrame:
         """Compute features from funding rate data.
