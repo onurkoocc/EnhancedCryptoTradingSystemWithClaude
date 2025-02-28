@@ -5,14 +5,12 @@ This module provides custom callbacks for training cryptocurrency
 trading models, including risk-adjusted metrics and performance monitoring.
 """
 
-import os
 import logging
+from typing import Dict, List, Tuple, Optional
+
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 from keras.src.callbacks import Callback
-from typing import Dict, List, Tuple, Optional, Union, Any
-import gc
 
 from ..utils.memory_monitor import log_memory_usage, clear_memory
 

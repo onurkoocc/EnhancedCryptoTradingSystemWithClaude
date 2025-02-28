@@ -17,6 +17,7 @@ import gc
 from pathlib import Path
 import matplotlib.pyplot as plt
 from scipy.stats import linregress
+from ..utils.path_manager import get_path_manager
 
 from ..utils.logging_utils import exception_handler, log_execution_time
 from ..utils.memory_monitor import memory_usage_decorator, log_memory_usage, clear_memory
@@ -70,7 +71,14 @@ class EnhancedStrategyBacktester:
         self.results_dir = results_dir
         self.logger = logger or logging.getLogger('Backtester')
 
-        # Create results directory
+        # Get path manager
+        self.path_manager = get_path_manager()
+
+        # Use path manager for results dir if it's the default
+        if results_dir == 'results':
+            self.results_dir = str(self.path_manager.get_path('results_backtest'))
+        else:
+            self.results_dir = results_dir
         os.makedirs(results_dir, exist_ok=True)
 
         # Storage for results
@@ -112,12 +120,19 @@ class EnhancedStrategyBacktester:
         df_len = len(self.data_df)
         iteration = 0
 
-        # Ensure results directory exists
-        trades_dir = os.path.join(self.results_dir, "trades")
+        backtest_run_dir = self.path_manager.get_timestamped_dir(
+            'results_backtest',
+            prefix='backtest_run'
+        )
+
+        # Create sub-directories
+        trades_dir = backtest_run_dir / "trades"
+        plots_dir = backtest_run_dir / "plots"
         os.makedirs(trades_dir, exist_ok=True)
+        os.makedirs(plots_dir, exist_ok=True)
 
         # Create CSV file for trades
-        trades_path = os.path.join(trades_dir, f"trades_{datetime.now():%Y%m%d_%H%M%S}.csv")
+        trades_path = str(trades_dir / "trades.csv")
         with open(trades_path, 'w') as f:
             f.write("iteration,entry_time,exit_time,direction,entry_price,exit_price,quantity,"
                     "pnl,pnl_percent,entry_signal,exit_reason,regime,stop_loss,take_profit\n")
@@ -413,6 +428,7 @@ class EnhancedStrategyBacktester:
         # Log trade count
         self.logger.info(f"Saved {len(trades)} trades to {filepath}")
 
+    # Update _save_checkpoint:
     def _save_checkpoint(self, iteration: int, result: Dict[str, Any]) -> None:
         """Save checkpoint for an iteration.
 
@@ -420,7 +436,11 @@ class EnhancedStrategyBacktester:
             iteration: Iteration number
             result: Result dictionary
         """
-        checkpoint_path = os.path.join(self.results_dir, f"checkpoint_iter_{iteration}.json")
+        backtest_run_dir = self.path_manager.get_timestamped_dir(
+            'results_backtest',
+            prefix='backtest_run'
+        )
+        checkpoint_path = str(backtest_run_dir / f"checkpoint_iter_{iteration}.json")
 
         with open(checkpoint_path, 'w') as f:
             # Convert dates to strings for JSON serialization
@@ -441,8 +461,12 @@ class EnhancedStrategyBacktester:
             all_results: List of result dictionaries
             performance_by_iteration: List of performance dictionaries
         """
+        backtest_run_dir = self.path_manager.get_timestamped_dir(
+            'results_backtest',
+            prefix='backtest_run'
+        )
         # Save summary results
-        summary_path = os.path.join(self.results_dir, f"results_summary_{datetime.now():%Y%m%d_%H%M%S}.json")
+        summary_path = str(backtest_run_dir / "results_summary.json")
 
         with open(summary_path, 'w') as f:
             # Convert all results to JSON serializable format
@@ -495,16 +519,19 @@ class EnhancedStrategyBacktester:
 
             json.dump(json_performance, f, indent=2)
 
+        plots_dir = backtest_run_dir / "plots"
         # Create summary plots
-        self._create_summary_plots(all_results, performance_by_iteration)
+        self._create_summary_plots(all_results, performance_by_iteration, plots_dir)
 
     def _create_summary_plots(self, all_results: List[Dict[str, Any]],
-                              performance_by_iteration: List[Dict[str, Any]]) -> None:
+                              performance_by_iteration: List[Dict[str, Any]],
+                              plots_dir: Path) -> None:
         """Create summary plots for backtest results.
 
         Args:
             all_results: List of result dictionaries
             performance_by_iteration: List of performance dictionaries
+            plots_dir: Directory to save plots
         """
         # Create plots directory
         plots_dir = os.path.join(self.results_dir, "plots")
@@ -583,7 +610,7 @@ class EnhancedStrategyBacktester:
                     plt.text(i, v + 0.02, f"{v:.1%}", ha='center')
 
                 # Save plot
-                plt.savefig(os.path.join(plots_dir, 'win_rate_by_regime.png'))
+                plt.savefig(str(plots_dir / 'equity_curve.png'))
                 plt.close()
 
         except Exception as e:

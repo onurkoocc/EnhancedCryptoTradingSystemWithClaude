@@ -4,8 +4,9 @@ Memory monitoring and management utilities.
 This module provides tools for monitoring memory usage and cleaning up
 memory when needed to prevent out-of-memory errors.
 """
-
+import functools
 import os
+import sys
 import time
 import psutil
 import threading

@@ -6,13 +6,13 @@ from files and environment variables, validating it, and providing access to
 configuration settings throughout the application.
 """
 
-import os
-import yaml
 import json
-from typing import Dict, Any, Optional, Type, TypeVar, List, Union
 import logging
-from pathlib import Path
+import os
 from dataclasses import asdict
+from typing import Dict, Any, Optional, TypeVar
+
+import yaml
 
 from .default_config import (
     DataConfig,
@@ -24,6 +24,7 @@ from .default_config import (
     SystemConfig,
     get_default_config
 )
+from ..utils.path_manager import get_path_manager
 
 # Type variable for generic dataclass updates
 T = TypeVar('T')
@@ -46,7 +47,31 @@ class ConfigurationManager:
         self.env_prefix = env_prefix
         self.logger = logger or logging.getLogger('ConfigManager')
         self.config = get_default_config()
+        self.path_manager = get_path_manager()
 
+    # Add this new method to the ConfigurationManager class:
+    def _update_paths(self):
+        """Update configuration paths to use path manager."""
+        # Update data paths
+        self.config.data.csv_30m = str(self.path_manager.get_data_file("btc", "30m"))
+        self.config.data.csv_4h = str(self.path_manager.get_data_file("btc", "4h"))
+        self.config.data.csv_daily = str(self.path_manager.get_data_file("btc", "daily"))
+        self.config.data.csv_oi = str(self.path_manager.get_path('data_market') / "btc_open_interest.csv")
+        self.config.data.csv_funding = str(self.path_manager.get_path('data_market') / "btc_funding_rates.csv")
+        self.config.data.cache_directory = str(self.path_manager.get_path('data_cache'))
+
+        # Update log paths
+        self.config.log_dir = str(self.path_manager.get_path('logs'))
+
+        # Update model paths
+        model_dir = self.path_manager.get_model_dir(self.config.model.project_name)
+        model_file = f"best_{self.config.model.project_name}.keras"
+        self.config.model.model_save_path = str(model_dir / model_file)
+
+        # Update backtest paths
+        self.config.backtest.results_directory = str(self.path_manager.get_path('results_backtest'))
+
+    # Modify the load_config method to call _update_paths:
     def load_config(self) -> SystemConfig:
         """Load configuration from file and environment variables.
 
@@ -77,6 +102,9 @@ class ConfigurationManager:
 
         # Update configuration objects
         self._update_config_from_dict(config_dict)
+
+        # Update paths to use path manager
+        self._update_paths()
 
         # Validate configuration
         self._validate_config()

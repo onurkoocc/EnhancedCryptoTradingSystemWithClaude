@@ -5,12 +5,21 @@ This module provides an enhanced deep learning model architecture
 for cryptocurrency price prediction and trading.
 """
 
-import os
+import gc
+import json
 import logging
+import os
+import time
+from typing import Dict, List, Tuple, Optional
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 from keras import Input, Model
+from keras.src.callbacks import (
+    EarlyStopping, ReduceLROnPlateau,
+    TensorBoard, CSVLogger
+)
 from keras.src.layers import (
     Dense, LSTM, GRU, Bidirectional, Conv1D, BatchNormalization,
     Dropout, GlobalAveragePooling1D, GlobalMaxPooling1D,
@@ -21,24 +30,14 @@ from keras.src.optimizers.schedules import (
     CosineDecay, ExponentialDecay, PiecewiseConstantDecay
 )
 from keras.src.regularizers import L2
-from keras.src.losses import CategoricalCrossentropy
-from keras.src.callbacks import (
-    EarlyStopping, ModelCheckpoint, ReduceLROnPlateau,
-    TensorBoard, CSVLogger
-)
-from typing import Dict, List, Tuple, Optional, Union, Any
-import gc
-import json
-import time
-from pathlib import Path
-
 from keras.src.saving import load_model
+
+from ..utils.path_manager import get_path_manager
 
 # Try to import keras_tuner, but handle the case where it's not installed
 try:
     import keras_tuner as kt
     from keras_tuner import Hyperband, BayesianOptimization, RandomSearch, Objective
-
     KERAS_TUNER_AVAILABLE = True
 except ImportError:
     KERAS_TUNER_AVAILABLE = False
@@ -97,6 +96,16 @@ class EnhancedCryptoModel:
 
         # Configure TensorFlow for performance
         self._configure_tensorflow()
+
+        # Get path manager
+        self.path_manager = get_path_manager
+
+        # Update model save path to use path manager if it's a default path
+        if model_save_path == "best_enhanced_model.keras":
+            model_dir = self.path_manager.get_model_dir(project_name)
+            self.model_save_path = str(model_dir / f"best_{project_name}.keras")
+        else:
+            self.model_save_path = model_save_path
 
     def _configure_tensorflow(self):
         """Configure TensorFlow for performance."""
@@ -396,7 +405,11 @@ class EnhancedCryptoModel:
             )
 
         # Create logs directory
-        logs_dir = os.path.join("logs", self.project_name, f"iteration_{iteration}")
+        # Create logs directory using path manager
+        logs_dir = self.path_manager.get_timestamped_dir(
+            'logs_tensorboard',
+            f"{self.project_name}_iter_{iteration}"
+        )
         os.makedirs(logs_dir, exist_ok=True)
 
         # Default callbacks
@@ -523,7 +536,11 @@ class EnhancedCryptoModel:
         original_seed = self.seed
 
         # Create ensemble directory
-        ensemble_dir = os.path.dirname(self.model_save_path)
+        # Create ensemble directory
+        ensemble_dir = self.path_manager.get_model_dir(
+            model_name=os.path.basename(os.path.splitext(self.model_save_path)[0]),
+            ensemble=True
+        )
         os.makedirs(ensemble_dir, exist_ok=True)
 
         # Empty existing ensemble
@@ -808,9 +825,9 @@ class EnhancedCryptoModel:
             return
 
         if filepath is None:
-            base_dir = os.path.dirname(self.model_save_path)
-            base_name = os.path.splitext(os.path.basename(self.model_save_path))[0]
-            filepath = os.path.join(base_dir, f"{base_name}_summary.txt")
+            model_name = os.path.splitext(os.path.basename(self.model_save_path))[0]
+            summary_dir = self.path_manager.get_path('models_saved')
+            filepath = str(summary_dir / f"{model_name}_summary.txt")
 
         with open(filepath, 'w') as f:
             # Store model summary

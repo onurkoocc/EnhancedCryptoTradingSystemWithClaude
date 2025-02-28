@@ -5,10 +5,10 @@ This module provides custom metrics for evaluating cryptocurrency
 trading models, including per-class metrics and trading-specific metrics.
 """
 
+from typing import Dict, List, Optional, Any
+
 import tensorflow as tf
 from keras.src.metrics import AUC, Metric
-import numpy as np
-from typing import Dict, List, Tuple, Optional, Union, Any
 
 
 class PerClassAUC(Metric):

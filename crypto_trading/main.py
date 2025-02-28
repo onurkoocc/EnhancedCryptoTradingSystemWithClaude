@@ -11,18 +11,18 @@ import logging
 import os
 import sys
 from datetime import datetime
-from pathlib import Path
-import json
 
-from crypto_trading.config import ConfigurationManager, get_default_config
-from crypto_trading.utils import LoggerFactory, setup_temperature_monitoring, monitor_memory
+from crypto_trading.config import ConfigurationManager
 from crypto_trading.data import BitcoinData, CryptoDataPreparer, EnhancedCryptoFeatureEngineer
 from crypto_trading.models import EnhancedCryptoModel
 from crypto_trading.trading import EnhancedSignalProducer, AdvancedRiskManager
 from crypto_trading.trading.backtester import EnhancedStrategyBacktester
+from crypto_trading.utils import LoggerFactory, setup_temperature_monitoring, monitor_memory
+from utils.path_manager import get_path_manager
 
 
-def setup_logging(log_level: str = 'INFO', log_dir: str = 'logs') -> logging.Logger:
+# Update the setup_logging function:
+def setup_logging(log_level: str = 'INFO', log_dir: str = None) -> logging.Logger:
     """Set up logging for the application.
 
     Args:
@@ -32,6 +32,11 @@ def setup_logging(log_level: str = 'INFO', log_dir: str = 'logs') -> logging.Log
     Returns:
         Root logger
     """
+    # Use path manager if log_dir not explicitly provided
+    if log_dir is None:
+        path_manager = get_path_manager()
+        log_dir = str(path_manager.get_date_dir('logs'))
+
     # Create LoggerFactory instance
     os.makedirs(log_dir, exist_ok=True)
     log_factory = LoggerFactory(
@@ -455,12 +460,15 @@ def fetch_data_mode(config, logger):
 
 
 def main():
-    """Main entry point."""
     # Parse command line arguments
     args = parse_arguments()
 
-    # Setup logging
-    logger = setup_logging(args.log_level, args.log_dir)
+    # Get path manager
+    path_manager = get_path_manager()
+
+    # Setup logging (use path manager)
+    log_dir = path_manager.get_date_dir('logs')
+    logger = setup_logging(args.log_level, str(log_dir))
     logger.info("Starting Cryptocurrency Trading System")
 
     # Load configuration
@@ -500,17 +508,22 @@ def main():
     # Set up performance monitoring if requested
     if args.monitor_memory or config.monitor_memory:
         logger.info("Setting up memory monitoring")
-        monitor_memory(threshold_gb=config.memory_threshold_gb, interval_seconds=60,
-                       log_file=os.path.join(args.log_dir, 'memory_usage.log'))
+        memory_log_dir = path_manager.get_path('logs_memory')
+        memory_log_file = str(memory_log_dir / f"memory_usage_{datetime.now():%Y%m%d_%H%M%S}.log")
+        monitor_memory(
+            threshold_gb=config.memory_threshold_gb,
+            interval_seconds=60,
+            log_file=memory_log_file
+        )
 
     if args.monitor_temperature or config.monitor_temperature:
         logger.info("Setting up temperature monitoring")
+        temp_log_dir = path_manager.get_path('logs_temperature')
         setup_temperature_monitoring(
             gpu_threshold=80,
             cpu_threshold=90,
-            log_dir=os.path.join(args.log_dir, 'temperature')
+            log_dir=str(temp_log_dir)
         )
-
     # Create necessary directories
     os.makedirs(config.backtest.results_directory, exist_ok=True)
     os.makedirs(os.path.dirname(config.model.model_save_path), exist_ok=True)
